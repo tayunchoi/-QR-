@@ -4,6 +4,21 @@
 <meta charset="utf-8">
 <title>글림 · 통합 HTML · 수정본 v2</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>
+/* 전체 모드 스위치: Supabase glim_app_config.mode 가 'pretest'|'posttest' 이면 검사 페이지로 이동(태블릿을 만지지 않고 전원 전환).
+   설정을 못 읽거나 'game'이면 그대로 게임. 검사 페이지는 설정이 'game'으로 돌아오면 다시 이 페이지로 돌아온다. */
+(function(){
+  try{
+    if(new URLSearchParams(location.search).get('nomode')==='1')return;  /* ?nomode=1 : 점검용, 이동 안 함 */
+    var URL0='https://citntimephlbdmntegia.supabase.co',KEY='sb_publishable_SeeKMYPdQ-Rf0f_mwk9x0A_WZDY6mjp',TEST='https://tayunchoi.github.io/QR_10-6/';
+    var c=new AbortController(),t=setTimeout(function(){c.abort();},4000);
+    fetch(URL0+'/rest/v1/glim_app_config?select=value&key=eq.mode',{signal:c.signal,headers:{apikey:KEY,Authorization:'Bearer '+KEY}})
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(rows){clearTimeout(t);var v=rows&&rows[0]&&rows[0].value;if(v==='pretest'||v==='posttest')location.replace(TEST+'?mode='+v);})
+      .catch(function(){clearTimeout(t);});
+  }catch(e){}
+})();
+</script>
 <!-- 홈 화면에 추가했을 때 주소창 없이 전체화면으로 실행 -->
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
