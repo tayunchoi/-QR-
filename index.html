@@ -4405,6 +4405,58 @@ window.GLIM_TTS=(function(){
   try{var s0=synth();if(s0){s0.addEventListener('voiceschanged',function(){try{report(pick(),voices());}catch(e){}});setTimeout(function(){try{var vs=voices();if(vs.length)report(pick(),vs);}catch(e){}},1500);}}catch(e){}
   return {speak:speak,pick:pick,voices:voices,report:report,engine:function(){return engineGuess(voices());}};
 })();
+/* ============================================================
+   GLIM_LEFTOVER — 태블릿에 남아 있는 설문·사후검사 기록 점검/복구
+   만족도 설문(QR_10-6/survey.html)과 사후 테스트는 이 게임과 같은 주소(tayunchoi.github.io)라 저장공간을 같이 쓴다.
+   게임이 열릴 때마다 조용히:
+   1) 설문 기록 중 이번 회차(10/23~) 응답을 glim_survey_responses로 다시 보낸다(이미 있는 응답은 중복 무시).
+   2) 이 기기에 무엇이 남아 있는지 요약을 glim_device_checks에 남긴다(하루에 내용이 바뀔 때만).
+   ============================================================ */
+(function(){
+  var URL='https://citntimephlbdmntegia.supabase.co/rest/v1/',KEY='sb_publishable_SeeKMYPdQ-Rf0f_mwk9x0A_WZDY6mjp';
+  var SINCE=Date.parse('2026-10-22T15:00:00.000Z');
+  function rd(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
+  function post(table,rows){return fetch(URL+table,{method:'POST',headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify(rows)}).then(function(r){return r.status;},function(){return 0;});}
+  var CLEAN=['session_id','student_number','device_id','survey_version','question_no','question_id','question_text','answer_value','answer_label','answer_position','elapsed_ms','started_at','answered_at','row_key'];
+  function clean(a){var o={};CLEAN.forEach(function(k){if(a[k]!==undefined)o[k]=a[k];});return o;}
+  async function resend(rows){
+    if(!rows.length)return {tried:0,ok:0};
+    var st=await post('glim_survey_responses',rows),ok=0;
+    if(st>=200&&st<300)return {tried:rows.length,ok:rows.length};
+    if(st===409){for(var i=0;i<rows.length;i++){var s1=await post('glim_survey_responses',[rows[i]]);if((s1>=200&&s1<300)||s1===409)ok++;}}
+    return {tried:rows.length,ok:ok,status:st};
+  }
+  async function run(){
+    try{
+      var recs=rd('glim.survey.v1.records',[]),queue=rd('glim.survey.v1.queue',[]);
+      if(!Array.isArray(recs))recs=[];if(!Array.isArray(queue))queue=[];
+      var round=recs.filter(function(r){return r&&Date.parse(r.started_at)>=SINCE;});
+      var rows=[],seen={};
+      var done=rd('glim.leftover.done',{});if(!done||typeof done!=='object')done={};
+      queue.concat.apply(queue,round.map(function(r){return r.answers||[];})).forEach(function(a){if(a&&a.row_key&&!seen[a.row_key]&&!done[a.row_key]){seen[a.row_key]=1;rows.push(clean(a));}});
+      var sent=await resend(rows);
+      if(sent.ok&&sent.ok===sent.tried){rows.forEach(function(r){done[r.row_key]=1;});try{localStorage.setItem('glim.leftover.done',JSON.stringify(done));localStorage.setItem('glim.survey.v1.queue','[]');}catch(e){}}
+      var picIds=rd('glim.picture-assessment.v1.index',[]);if(!Array.isArray(picIds))picIds=[];
+      var pics=picIds.map(function(id){var x=rd('glim.picture-assessment.v1.session.'+id,null);return x?{id:x.id,student:x.studentCode,kind:x.kind,started:x.startedAt,answers:(x.answers||[]).length,status:x.status}:null;}).filter(Boolean).slice(-20);
+      var sid='';try{sid=(window.GLIM_CLOUD&&GLIM_CLOUD.current&&GLIM_CLOUD.current())||'';}catch(e){}
+      var payload={
+        survey_device:rd('glim.survey.v1.device',null),test_device:rd('glim.picture-assessment.v1.device',null),
+        game_device:(window.GLIM_DB&&GLIM_DB.deviceId)?GLIM_DB.deviceId():null,
+        survey_sessions:recs.slice(-20).map(function(r){return {student:r.student_number,session:r.session_id,started:r.started_at,answered:(r.answers||[]).length,unsent:(r.answers||[]).filter(function(a){return !a.sent;}).length,labels:(r.answers||[]).map(function(a){return a.question_no+':'+a.answer_label;})};}),
+        survey_queue:queue.length,resent:sent,test_sessions:pics,
+        ua:String(navigator.userAgent||'').slice(0,200),at:new Date().toISOString()
+      };
+      var sig=new Date().toISOString().slice(0,10)+'#'+sid+'#'+recs.length+'#'+queue.length+'#'+pics.length+'#'+sent.ok;
+      if(rd('glim.leftover.sig',null)===sig)return;
+      var st=await post('glim_device_checks',[{device_id:payload.test_device||payload.survey_device||payload.game_device,student_id:sid,kind:'leftover',payload:payload}]);
+      if(st>=200&&st<300){try{localStorage.setItem('glim.leftover.sig',JSON.stringify(sig));}catch(e){}}
+    }catch(e){}
+  }
+  /* 부팅을 방해하지 않도록 잠시 뒤에, 학생이 입장한 뒤 한 번 더 */
+  setTimeout(run,6000);setTimeout(run,60000);
+  window.GLIM_LEFTOVER={run:run};
+})();
+
 
 
 /* ============================================================
