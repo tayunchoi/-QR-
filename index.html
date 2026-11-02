@@ -4486,8 +4486,10 @@ window.GLIM_CLOUD=(function(){
   function prepare(id){
     var n=norm(id);
     if(!n||!enabled())return Promise.resolve(false);
-    return fetchState(n).then(function(row){
-      if(!row||!row.state||typeof row.state!=='object')return false;
+    var t0=Date.now();pendingN=n;diag={};
+    return fetchRow(n).then(function(row){return row;},function(e){diag.fetchError=String(e&&e.message||e);return null;}).then(function(row){
+      diag.fetchMs=Date.now()-t0;
+      if(!row||!row.state||typeof row.state!=='object'){report('cloud_restore',{outcome:row?'bad_row':'no_row',diag:diag});return false;}
       var localAt=0;try{localAt=+(localStorage.getItem('glim_stu_at_'+n))||0;}catch(e){}
       var cloudAt=+(row.saved_at)||0;
       var localBundle=null;try{var lb=localStorage.getItem('glim_stu_'+n);if(lb)localBundle=JSON.parse(lb);}catch(e){}
@@ -4496,16 +4498,20 @@ window.GLIM_CLOUD=(function(){
       /* 진행 정도를 먼저 비교한다. 시각은 진행이 같을 때만 쓴다.
          (이 기기의 '더 최신이지만 빈' 기록이 서버의 진행 기록을 이기는 일을 막는다) */
       var cs=score(row.state),ls=score(localBundle);
+      diag.cloudScore=cs;diag.localScore=ls;diag.cloudAt=cloudAt;diag.localAt=localAt;diag.bytes=JSON.stringify(row.state).length;
       if(cs<ls||(cs===ls&&cloudAt<=localAt)){
         if(cs<ls){var at=Date.now();markFresh(n,at);upsert(n,localBundle,at).catch(function(){});}
         vet[n]=true;
+        report('cloud_restore',{outcome:'local_kept',diag:diag});
         return false;
       }
       try{localStorage.removeItem('glim_stu_'+n);}catch(e){} /* 옛 꾸러미는 비워 공간 확보 (복원본은 메모리로 전달) */
       vet[n]=true;
       markFresh(n,cloudAt);
       pendingN=n;delete partial[n];
-      window.__GLIM_CLOUD_BUNDLE__=row.state;
+      var st=row.state;
+      if(diag.bytes>BIG&&st[COURSE_KEY]){var sc=slimCourse(String(st[COURSE_KEY]),1);if(sc){st=Object.assign({},st);st[COURSE_KEY]=sc;diag.preSlim=1;}}
+      window.__GLIM_CLOUD_BUNDLE__=st;
       window.__GLIM_CLOUD_FORCE__=n; /* 같은 번호 재로그인이어도 복원 경로를 타게 함 */
       return true;
     });
@@ -4553,7 +4559,16 @@ window.GLIM_CLOUD=(function(){
      1단계: 판정이 끝난 블록의 행·이벤트, 지난 환경 보관분 제거 (진행·완료·현재 블록 기록은 유지)
      2단계: 행·이벤트·관문 기록 전부 제거 (진행 상태만 유지)
      그래도 못 쓴 키가 있으면 '부분 복원'으로 표시해 서버 기록을 덮어쓰지 않게 한다. */
-  var partial={},pendingN='';
+  var partial={},pendingN='',diag={};
+  /* 복원 진단 기록 → glim_device_checks (어느 기기에서 왜 복원이 안 됐는지 서버에서 확인) */
+  function report(kind,payload){
+    try{
+      var total=0,n=0;try{for(var i=0;i<localStorage.length;i++){n++;total+=(localStorage.getItem(localStorage.key(i))||'').length;}}catch(e){}
+      var body={device_id:GLIM_DB.deviceId(),student_id:String(pendingN||sid||''),kind:kind,payload:Object.assign({ua:String(navigator.userAgent||'').slice(0,200),standalone:!!navigator.standalone||(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches),lsTotal:total,lsKeys:n,at:Date.now(),build:'cloud-fix-2'},payload||{})};
+      fetch(base()+'/rest/v1/glim_device_checks',{method:'POST',headers:headers({Prefer:'return=minimal'}),body:JSON.stringify(body),keepalive:true}).catch(function(){});
+    }catch(e){}
+  }
+  var BIG=1800000; /* 이보다 큰 꾸러미는 복원 때 계단 로그를 미리 줄여 저장 공간 한도(사파리 5MB)를 피한다 */
   var COURSE_KEY='glim.st5.pdfv9.course';
   function unpack(p){if(Array.isArray(p))return p;if(!p||!p.columns||!p.rows)return [];return p.rows.map(function(a){var o={};p.columns.forEach(function(k,i){o[k]=a[i];});return o;});}
   function pack(rows){var cols=[];rows.forEach(function(r){Object.keys(r).forEach(function(k){if(cols.indexOf(k)<0)cols.push(k);});});return {columns:cols,rows:rows.map(function(r){return cols.map(function(k){return r[k]===undefined?null:r[k];});})};}
@@ -4579,14 +4594,16 @@ window.GLIM_CLOUD=(function(){
   function apply(sb){
     var keys=Object.keys(sb).filter(function(k){return k&&k.indexOf('glim.st4.')!==0;});
     keys.sort(function(a,b){return String(sb[a]||'').length-String(sb[b]||'').length;});
-    var failed=[];
+    var failed=[],slimmed={};
     keys.forEach(function(k){
       var v=sb[k];if(v==null)return;v=String(v);
       if(trySet(k,v))return;
-      if(k===COURSE_KEY){var s1=slimCourse(v,1);if(s1&&trySet(k,s1))return;var s2=slimCourse(v,2);if(s2&&trySet(k,s2))return;}
+      if(k===COURSE_KEY){var s1=slimCourse(v,1);if(s1&&trySet(k,s1)){slimmed[k]=1;return;}var s2=slimCourse(v,2);if(s2&&trySet(k,s2)){slimmed[k]=2;return;}}
       failed.push(k);
     });
     if(failed.length){partial[pendingN]=true;try{console.warn('[GLIM_CLOUD] 저장 공간 부족으로 일부 기록을 복원하지 못함:',failed.join(','));}catch(e){}}
+    var okProg=false;try{okProg=!!localStorage.getItem('glim_app_prog_v173');}catch(e){}
+    report('cloud_restore',{outcome:failed.length?'partial':'restored',failed:failed,slimmed:slimmed,keys:keys.length,progOk:okProg,diag:diag});
     return failed;
   }
   /* 학생 전환 때 떠나는 학생의 꾸러미(glim_stu_번호)를 못 쓰면(공간 부족) 줄여서라도 남기고,
