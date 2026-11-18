@@ -2,7 +2,130 @@
 <html lang="ko" class="glim-booting">
 <head>
 <meta charset="utf-8">
-<script id="glim-update-check">(function(){var V="17.4";window.__GLIM_BUILD__=V;try{if(!/^https?:$/.test(location.protocol))return;var x=new XMLHttpRequest();x.open("GET","version.txt?t="+Date.now(),true);x.timeout=8000;x.onload=function(){try{var s=String(x.responseText||"").replace(/\s+/g,"");if(x.status!==200||!/^[0-9A-Za-z._-]{1,40}$/.test(s)||s===V)return;var k="glim_update_try";if(sessionStorage.getItem(k)===s)return;sessionStorage.setItem(k,s);location.reload();}catch(e){}};x.send();}catch(e){}})();</script>
+<script id="glim-sound-settings">
+(function(){
+  var KEY='glim_sound_v1',S={bgm:1,sfx:1},all=[];
+  function cl(v){v=+v;return isFinite(v)?Math.max(0,Math.min(1,v)):1;}
+  try{var p=JSON.parse(localStorage.getItem(KEY)||'null');if(p){S.bgm=cl(p.bgm);S.sfx=cl(p.sfx);}}catch(e){}
+  window.GLIM_SOUND=S;
+  function masters(win,ctx){
+    if(ctx.__gM)return ctx.__gM;
+    var mu=ctx.createGain(),sf=ctx.createGain();mu.__gMaster=sf.__gMaster=true;
+    mu.gain.value=S.bgm;sf.gain.value=S.sfx;
+    win.__gOC.call(mu,ctx.destination);win.__gOC.call(sf,ctx.destination);
+    ctx.__gM={music:mu,sfx:sf,n:{music:0,sfx:0}};all.push({win:win,ctx:ctx,m:ctx.__gM});return ctx.__gM;
+  }
+  /* 음악 = 길게 반복 재생되는 음원(게임 BGM). 그 밖(짧은 삑·쿵 소리)은 효과음 */
+  function srcIsMusic(win,n){
+    try{var BS=win.AudioBufferSourceNode;if(!BS||!(n instanceof BS)||!n.buffer)return false;var d=n.buffer.duration;return (n.loop&&d>=4)||d>=20;}catch(e){return false;}
+  }
+  function mark(win,n,depth){
+    if(!n||n.__gMaster||n.__gMusic||(depth|0)>24)return;n.__gMusic=true;
+    if(n.__gOut==='sfx'){var M=masters(win,n.context);try{win.__gOD.call(n,M.sfx);}catch(e){}try{win.__gOC.call(n,M.music);n.__gOut='music';M.n.music++;M.n.sfx--;}catch(e){}}
+    var d=n.__gDowns||[];for(var i=0;i<d.length;i++)mark(win,d[i],(depth|0)+1);
+  }
+  function install(win){
+    try{
+      if(!win||win.__gSnd)return;var AN=win.AudioNode;if(!AN||!AN.prototype||!AN.prototype.connect)return;win.__gSnd=1;
+      var oc=win.__gOC=AN.prototype.connect,od=win.__gOD=AN.prototype.disconnect;
+      AN.prototype.connect=function(dest){
+        var ctx=this.context;
+        if(dest&&ctx&&dest===ctx.destination&&!this.__gMaster){
+          var M=masters(win,ctx),kind=(this.__gMusic||srcIsMusic(win,this))?'music':'sfx';
+          if(this.__gOut&&this.__gOut!==kind){try{od.call(this,M[this.__gOut]);}catch(e){}}
+          this.__gOut=kind;oc.call(this,M[kind]);M.n[kind]++;return dest;
+        }
+        var r=oc.apply(this,arguments);
+        try{
+          if(dest&&dest instanceof AN&&!dest.__gMaster){
+            var dn=this.__gDowns||(this.__gDowns=[]);if(dn.indexOf(dest)<0&&dn.length<16)dn.push(dest);
+            if(this.__gMusic||srcIsMusic(win,this))mark(win,dest,0);
+          }
+        }catch(e){}
+        return r;
+      };
+      AN.prototype.disconnect=function(dest){
+        try{
+          if(this.__gOut&&this.context&&!this.__gMaster){
+            if(!arguments.length){this.__gOut=null;}
+            else if(dest===this.context.destination){var k=this.__gOut;this.__gOut=null;return od.call(this,masters(win,this.context)[k]);}
+          }
+        }catch(e){}
+        return od.apply(this,arguments);
+      };
+      var BS=win.AudioBufferSourceNode;
+      if(BS&&BS.prototype&&BS.prototype.start){var os=BS.prototype.start;BS.prototype.start=function(){
+        try{if(srcIsMusic(win,this)){var d=this.__gDowns||[];for(var i=0;i<d.length;i++)mark(win,d[i],0);}}catch(e){}
+        return os.apply(this,arguments);};}
+    }catch(e){}
+  }
+  function applyAll(){
+    all=all.filter(function(e){try{return !e.win.closed&&e.ctx.state!=='closed';}catch(x){return false;}});
+    all.forEach(function(e){
+      [['music',S.bgm],['sfx',S.sfx]].forEach(function(q){var g=e.m[q[0]].gain;try{g.cancelScheduledValues(e.ctx.currentTime);g.setTargetAtTime(q[1],e.ctx.currentTime,0.03);}catch(x){try{g.value=q[1];}catch(y){}}});
+    });
+  }
+  window.GLIM_SOUND_SET=function(k,v){if(k!=='bgm'&&k!=='sfx')return;S[k]=cl(v);try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}applyAll();};
+  window.GLIM_installSound=install;
+  window.__GLIM_SOUND_DEBUG__=function(){return all.map(function(e){var w='?';try{w=e.win===window?'main':(e.win.document.title||'frame');}catch(x){}return {win:w,state:e.ctx.state,music:+e.m.music.gain.value.toFixed(3),sfx:+e.m.sfx.gain.value.toFixed(3),routed:{music:e.m.n.music,sfx:e.m.n.sfx}};});};
+  install(window);
+  /* 게임 창(iframe)은 열릴 때 parent.GLIM_installPear(window) 를 가장 먼저 부른다 → 그 길목에 같이 설치 */
+  var tries=0;(function hook(){var o=window.GLIM_installPear;
+    if(typeof o==='function'){if(!o.__gSnd){var w=function(win){try{install(win);}catch(e){}return o.apply(this,arguments);};w.__gSnd=1;window.GLIM_installPear=w;}return;}
+    if(++tries<400)setTimeout(hook,50);})();
+
+  /* ---------- 설정 창 ---------- */
+  var el=null,tctx=null;
+  function testBeep(){
+    try{var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;if(!tctx)tctx=new AC();if(tctx.state==='suspended')tctx.resume();
+      [[660,0],[990,.09]].forEach(function(q){var t=tctx.currentTime+q[1],o=tctx.createOscillator(),g=tctx.createGain();o.type='sine';o.frequency.setValueAtTime(q[0],t);
+        g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.22,t+.012);g.gain.exponentialRampToValueAtTime(.0001,t+.14);o.connect(g);g.connect(tctx.destination);o.start(t);o.stop(t+.17);});
+    }catch(e){}
+  }
+  var NOTE='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17.5V6.2l10-2.2v11" fill="none" stroke="#8a5a1c" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><ellipse cx="6.4" cy="17.6" rx="3.1" ry="2.5" fill="#8a5a1c"/><ellipse cx="16.4" cy="15.2" rx="3.1" ry="2.5" fill="#8a5a1c"/></svg>';
+  var SPK='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.6L12.5 5v14l-4.9-4.5H4z" fill="#8a5a1c" stroke="#8a5a1c" stroke-width="1.6" stroke-linejoin="round"/><path d="M15.6 9a4.2 4.2 0 0 1 0 6M18.2 6.6a7.6 7.6 0 0 1 0 10.8" fill="none" stroke="#8a5a1c" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  function build(){
+    var st=document.createElement('style');st.textContent=
+      '#glimSet{position:fixed;inset:0;z-index:9980;display:none;align-items:center;justify-content:center;background:rgba(24,20,50,.56);font-family:"Jua",sans-serif;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;padding:12px;box-sizing:border-box}'
+      +'#glimSet.on{display:flex;animation:gs_in .22s ease both}@keyframes gs_in{from{opacity:0}to{opacity:1}}@keyframes gs_pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}'
+      +'#glimSet .gs-card{width:min(600px,92vw);max-height:94vh;overflow:auto;box-sizing:border-box;background:linear-gradient(180deg,#fffaf0 0%,#fff0cc 100%);border:5px solid #8a5a1c;border-radius:32px;box-shadow:0 8px 0 #6b4418,0 18px 40px rgba(20,14,40,.45);padding:clamp(16px,3.4vmin,28px) clamp(18px,4vmin,34px) clamp(18px,3.6vmin,30px);animation:gs_pop .26s cubic-bezier(.2,.9,.3,1.4) both}'
+      +'#glimSet .gs-title{text-align:center;color:#6b3a12;font-size:clamp(26px,5.4vmin,40px);line-height:1.1;margin:0 0 clamp(10px,2.6vmin,20px)}'
+      +'#glimSet .gs-row{display:flex;align-items:center;gap:clamp(8px,1.8vmin,14px);background:#fff;border:3px solid #e2c98f;border-radius:22px;padding:clamp(10px,2.2vmin,16px) clamp(12px,2.4vmin,18px);margin:0 0 clamp(10px,2.2vmin,16px)}'
+      +'#glimSet .gs-ic{flex:none;width:clamp(34px,6.4vmin,48px);height:clamp(34px,6.4vmin,48px);border-radius:50%;background:linear-gradient(180deg,#fff3c4,#ffd66b);border:3px solid #8a5a1c;display:flex;align-items:center;justify-content:center}'
+      +'#glimSet .gs-ic svg{width:66%;height:66%}'
+      +'#glimSet .gs-lab{flex:none;width:clamp(86px,17vmin,128px);color:#5a3408;font-size:clamp(18px,3.6vmin,26px);white-space:nowrap}'
+      +'#glimSet .gs-val{flex:none;width:clamp(46px,9vmin,66px);text-align:right;color:#8a5a1c;font-size:clamp(17px,3.3vmin,24px);white-space:nowrap}'
+      +'#glimSet input[type=range]{-webkit-appearance:none;appearance:none;flex:1 1 auto;min-width:0;height:44px;margin:0;background:transparent;cursor:pointer;touch-action:pan-y;--p:100%}'
+      +'#glimSet input[type=range]:focus{outline:none}'
+      +'#glimSet input[type=range]::-webkit-slider-runnable-track{height:16px;border-radius:999px;border:3px solid #8a5a1c;background:linear-gradient(90deg,#ffb400 0,#ffb400 var(--p),#efe4c8 var(--p),#efe4c8 100%)}'
+      +'#glimSet input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:40px;height:40px;margin-top:-15px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fffbe0,#ffd23c 58%,#f2a200);border:3px solid #8a5a1c;box-shadow:0 3px 0 #8a5a1c}'
+      +'#glimSet input[type=range]::-moz-range-track{height:10px;border-radius:999px;border:3px solid #8a5a1c;background:linear-gradient(90deg,#ffb400 0,#ffb400 var(--p),#efe4c8 var(--p),#efe4c8 100%)}'
+      +'#glimSet input[type=range]::-moz-range-thumb{width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fffbe0,#ffd23c 58%,#f2a200);border:3px solid #8a5a1c;box-shadow:0 3px 0 #8a5a1c}'
+      +'#glimSet .gs-note{text-align:center;color:#9a7a4a;font-size:clamp(13px,2.5vmin,17px);margin:0 0 clamp(10px,2.4vmin,18px)}'
+      +'#glimSet .gs-close{display:block;margin:0 auto;padding:clamp(8px,1.8vmin,12px) clamp(34px,8vmin,60px);border-radius:999px;border:4px solid #8a5a1c;background:linear-gradient(180deg,#fff3a8 0%,#ffd23c 55%,#ffb400 100%);color:#5a3408;font-family:inherit;font-size:clamp(20px,4vmin,28px);box-shadow:0 5px 0 #8a5a1c;cursor:pointer;touch-action:manipulation}'
+      +'#glimSet .gs-close:active{transform:translateY(3px);box-shadow:0 2px 0 #8a5a1c}';
+    document.head.appendChild(st);
+    el=document.createElement('div');el.id='glimSet';el.setAttribute('data-glim-settings','');
+    el.innerHTML='<div class="gs-card" role="dialog" aria-modal="true" aria-label="설정">'
+      +'<div class="gs-title">설정</div>'
+      +'<div class="gs-row"><div class="gs-ic">'+NOTE+'</div><div class="gs-lab">배경 음악</div><input type="range" min="0" max="100" step="5" data-gs="bgm" aria-label="배경 음악 크기"><div class="gs-val" data-gsv="bgm"></div></div>'
+      +'<div class="gs-row"><div class="gs-ic">'+SPK+'</div><div class="gs-lab">효과음</div><input type="range" min="0" max="100" step="5" data-gs="sfx" aria-label="효과음 크기"><div class="gs-val" data-gsv="sfx"></div></div>'
+      +'<div class="gs-note">배경 음악은 게임을 하는 동안 나와요</div>'
+      +'<button type="button" class="gs-close" data-gs-close>닫기</button></div>';
+    document.body.appendChild(el);
+    function sync(k){var i=el.querySelector('[data-gs="'+k+'"]'),v=Math.round(S[k]*100);i.value=v;i.style.setProperty('--p',v+'%');el.querySelector('[data-gsv="'+k+'"]').textContent=v?String(v):'꺼짐';}
+    ['bgm','sfx'].forEach(function(k){var i=el.querySelector('[data-gs="'+k+'"]');
+      i.addEventListener('input',function(){window.GLIM_SOUND_SET(k,(+i.value)/100);sync(k);});
+      i.addEventListener('change',function(){window.GLIM_SOUND_SET(k,(+i.value)/100);sync(k);if(k==='sfx'&&S.sfx>0)testBeep();});});
+    el.addEventListener('click',function(e){if(e.target===el||(e.target.closest&&e.target.closest('[data-gs-close]')))close();});
+    el.__sync=function(){sync('bgm');sync('sfx');};
+  }
+  function close(){if(el)el.classList.remove('on');}
+  window.GLIM_SETTINGS_OPEN=function(){try{if(!el)build();el.__sync();el.classList.add('on');}catch(e){}};
+  window.GLIM_SETTINGS_CLOSE=close;
+})();
+</script>
+<script id="glim-update-check">(function(){var V="17.5";window.__GLIM_BUILD__=V;try{if(!/^https?:$/.test(location.protocol))return;var x=new XMLHttpRequest();x.open("GET","version.txt?t="+Date.now(),true);x.timeout=8000;x.onload=function(){try{var s=String(x.responseText||"").replace(/\s+/g,"");if(x.status!==200||!/^[0-9A-Za-z._-]{1,40}$/.test(s)||s===V)return;var k="glim_update_try";if(sessionStorage.getItem(k)===s)return;sessionStorage.setItem(k,s);location.reload();}catch(e){}};x.send();}catch(e){}})();</script>
 <title>글림 · 통합 HTML · 수정본 v2</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- 홈 화면에 추가했을 때 주소창 없이 전체화면으로 실행 -->
@@ -7902,15 +8025,15 @@ class Component extends DCLogic {
   /* ===== 새 홈(나라 지도)·통단어 나라: 누르면 강조된 뒤 넘어간다 ===== */
   landPick(key){
     if(this.state.landPick)return;
-    const toMap=()=>this.go('home'),toRace=()=>this.go('racetitle'),toStairs=()=>this.go('stairs'),toOld=()=>this.go('home',{homeClassic:true});
+    const toMap=()=>this.go('home'),toRace=()=>this.go('racetitle'),toStairs=()=>this.go('stairs'),openSet=()=>{try{window.GLIM_SETTINGS_OPEN();}catch(e){}};   /* 설정·소리 버튼 → 소리 설정 창 (예전 홈으로 가지 않는다) */
     const ready={word:()=>this.go('wordland',{land:'word'}),syl:()=>this.go('sylland',{land:'syl'}),pho:()=>this.go('pholand',{land:'pho'}),
       back:toMap,sback:toMap,pback:toMap,race:toRace,srace:toRace,prace:toRace,stairs:toStairs,sstairs:toStairs,pstairs:toStairs,break:()=>this.go('break'),
-      mset:()=>this.setState({homeClassic:true,landPick:''}),wset:toOld,sset:toOld,pset:toOld,
+      mset:openSet,wset:openSet,sset:openSet,pset:openSet,msnd:openSet,wsnd:openSet,ssnd:openSet,psnd:openSet,
       /* 관리자용: 기존 리포트(#glimDash)를 그대로 연다 — 초기화·해금·난도 조절 모두 그 안의 원래 기능 */
       admin:()=>{const b=document.getElementById('glimDashBtn');if(b&&typeof b.onclick==='function')b.onclick();
         else{this.setState({landToast:'리포트를 준비하고 있어요. 잠시 뒤 다시 눌러 주세요'});clearTimeout(this._landT2);this._landT2=setTimeout(()=>this.setState({landToast:''}),1600);}}};
-    const snd='소리 설정은 준비 중이에요',dev='새로운 게임은 개발 중이에요';
-    const soon={ssnd:snd,psnd:snd,snew:dev,pnew:dev,voc:'어휘 나라는 곧 열려요!',plaza:'대표 게임 광장은 곧 열려요!',msnd:'소리 설정은 준비 중이에요',wsnd:'소리 설정은 준비 중이에요'};
+    const dev='새로운 게임은 개발 중이에요';
+    const soon={snew:dev,pnew:dev,voc:'어휘 나라는 곧 열려요!',plaza:'대표 게임 광장은 곧 열려요!'};
     this.setState({landPick:key,landToast:soon[key]||''});
     clearTimeout(this._landT);
     this._landT=setTimeout(()=>{
@@ -7962,9 +8085,10 @@ class Component extends DCLogic {
   raceHomePick(key){
     if(this.state.landPick)return;
     const roads=this.raceRoads(this.state),m=/^r([123])$/.exec(key),road=m?roads[+m[1]-1]:null;
-    const act={rbig:()=>this.go('animal'),rback:()=>this.go(this.landScreen())};
+    const openSet=()=>{try{window.GLIM_SETTINGS_OPEN();}catch(e){}};
+    const act={rbig:()=>this.go('animal'),rback:()=>this.go(this.landScreen()),rsnd:openSet,rset:openSet};
     if(road&&!road.locked)act[key]=()=>this.go('stage',{nation:road.k});
-    const msg=road&&road.locked?road.why:(key==='rsnd'||key==='rset')?(key==='rsnd'?'소리 설정은 준비 중이에요':'설정은 준비 중이에요'):'';
+    const msg=road&&road.locked?road.why:'';
     this.setState({landPick:key,landToast:msg});
     clearTimeout(this._landT);
     this._landT=setTimeout(()=>{this.setState({landPick:''});
